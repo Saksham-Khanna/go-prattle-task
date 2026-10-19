@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+backend/node_modules/
+
+# builds
+.next/
+dist/
+backend/dist/
+*.tsbuildinfo
+
+# environment — never commit real credentials
+.env
+.env.local
+.env*.local
+backend/.env
+
+# logs & misc
+npm-debug.log*
+*.log
+.DS_Store
+
+# vercel
+.vercel/
