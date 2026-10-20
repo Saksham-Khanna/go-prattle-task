@@ -2,18 +2,25 @@ import mongoose from "mongoose";
 import { Requirement, type RequirementDoc } from "../models/Requirement";
 import {
   dateRangeError,
+  todayIsoDate,
   type RequirementPayload,
 } from "../validators/requirement";
 import { ApiError } from "../utils/ApiError";
 
 /**
  * Create a requirement. The payload is already Zod-validated by the
- * controller; this layer adds the date-range cross-field rule and
- * converts ISO date strings to Date objects for storage.
+ * controller; this layer re-applies the date rules defensively and converts
+ * ISO date strings to Date objects for storage.
  */
 export async function createRequirement(
   payload: RequirementPayload,
 ): Promise<RequirementDoc> {
+  if (payload.startDate < todayIsoDate()) {
+    throw new ApiError(400, "Validation failed", [
+      { field: "startDate", message: "Event date can't be in the past." },
+    ]);
+  }
+
   const rangeError = dateRangeError(payload.startDate, payload.endDate);
   if (rangeError) {
     throw new ApiError(400, "Validation failed", [

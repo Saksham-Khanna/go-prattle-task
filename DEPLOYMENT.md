@@ -72,7 +72,8 @@ git push -u origin main
    | --------------------- | ------------------------------------------------- |
    | `NEXT_PUBLIC_API_URL` | `https://<your-render-service>.onrender.com/api`  |
 5. Click **Deploy**.
-6. Vercel runs `npm install` → `next build`. No `DATABASE_URL` needed.
+6. Vercel runs `npm install` → `next build`. The frontend has no database
+   dependency; all persistence happens in the Express + MongoDB service.
 
 ---
 
@@ -100,6 +101,19 @@ git push -u origin main
 | `FRONTEND_URL` | **Yes**  | CORS allow-list origin (your Vercel URL).                     |
 | `NODE_ENV`     | **Yes**  | `production`                                                  |
 | `PORT`         | No       | Injected by Render; do not set manually.                      |
+
+---
+
+## Tests
+
+```bash
+cd backend
+npm test        # validator + API tests; API tests start an in-memory MongoDB
+```
+
+The API suite needs no Atlas credentials. It covers `201` creation, `400`
+invalid/incompatible payloads and malformed MongoDB IDs, and `404` for a valid
+but nonexistent record. Run it before deploying.
 
 ---
 

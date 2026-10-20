@@ -1,24 +1,35 @@
 import { asyncHandler } from "../utils/asyncHandler";
-import { ApiError, type FieldError } from "../utils/ApiError";
+import { ApiError } from "../utils/ApiError";
 import {
   createRequirement,
   getRequirementById,
   listRequirements,
 } from "../services/requirement.service";
-import { requirementPayloadSchema } from "../validators/requirement";
+import {
+  detectCategoryMismatch,
+  requirementPayloadSchema,
+  toFieldErrors,
+} from "../validators/requirement";
 
 /**
  * POST /api/requirements
  * 201 → created · 400 → validation failed (per-field errors)
  */
 export const createRequirementController = asyncHandler(async (req, res) => {
+  // Give category-mismatched payloads one clear error instead of a list of
+  // misleading "required" messages from the wrong branch of the union.
+  const mismatch = detectCategoryMismatch(req.body);
+  if (mismatch) {
+    throw new ApiError(400, "Validation failed", [mismatch]);
+  }
+
   const result = requirementPayloadSchema.safeParse(req.body);
   if (!result.success) {
-    const errors: FieldError[] = result.error.issues.map((issue) => ({
-      field: issue.path.join("."),
-      message: issue.message,
-    }));
-    throw new ApiError(400, "Validation failed", errors);
+    throw new ApiError(
+      400,
+      "Validation failed",
+      toFieldErrors(result.error.issues, req.body),
+    );
   }
 
   const doc = await createRequirement(result.data);

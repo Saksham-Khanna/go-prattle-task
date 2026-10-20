@@ -10,6 +10,7 @@ import {
 } from "@/types/requirement";
 import {
   buildPayload,
+  humanizeZodIssue,
   requirementPayloadSchema,
   stepForField,
 } from "@/lib/validation";
@@ -43,9 +44,16 @@ function mapIssuesToStep(issues: ZodIssue[], step: number): Record<string, strin
     if (!inStep) continue;
     const key =
       root === "requirements" ? issue.path.slice(1).join(".") : issue.path.join(".");
-    if (!(key in map)) map[key] = issue.message;
+    if (!(key in map)) map[key] = humanizeZodIssue(issue);
   }
   return map;
+}
+
+/** Server errors use the wire field path; form fields drop the `requirements.` root. */
+function formKeyForServerField(field: string): string {
+  return field.startsWith("requirements.")
+    ? field.slice("requirements.".length)
+    : field;
 }
 
 export function RequirementForm() {
@@ -62,19 +70,48 @@ export function RequirementForm() {
   const submittingRef = useRef(false);
   const topRef = useRef<HTMLDivElement>(null);
 
+  /** Removes only the errors for fields the user just edited. */
+  const clearFieldErrors = useCallback((keys: string[]) => {
+    setErrors((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const key of keys) {
+        if (key in next) {
+          delete next[key];
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, []);
+
   const update = useCallback(
-    (patch: Partial<FormState>) => setForm((f) => ({ ...f, ...patch })),
-    [],
+    (patch: Partial<FormState>) => {
+      setForm((f) => ({ ...f, ...patch }));
+      // Switching category invalidates every Step 2 error from the old draft.
+      if ("category" in patch) setErrors({});
+      else clearFieldErrors(Object.keys(patch));
+      setSubmitError(null);
+    },
+    [clearFieldErrors],
   );
   const updateSection = useCallback(
-    (section: Category, patch: Partial<FormState[Category]>) =>
-      setForm((f) => ({ ...f, [section]: { ...f[section], ...patch } })),
-    [],
+    (section: Category, patch: Partial<FormState[Category]>) => {
+      setForm((f) => ({ ...f, [section]: { ...f[section], ...patch } }));
+      clearFieldErrors(Object.keys(patch));
+      setSubmitError(null);
+    },
+    [clearFieldErrors],
   );
   const updateDetails = useCallback(
-    (patch: Partial<FormState["details"]>) =>
-      setForm((f) => ({ ...f, details: { ...f.details, ...patch } })),
-    [],
+    (patch: Partial<FormState["details"]>) => {
+      setForm((f) => ({ ...f, details: { ...f.details, ...patch } }));
+      clearFieldErrors(
+        Object.keys(patch).map((key) => `additionalDetails.${key}`),
+      );
+      setSubmitError(null);
+    },
+    [clearFieldErrors],
   );
 
   const scrollToTop = () =>
@@ -109,6 +146,7 @@ export function RequirementForm() {
   };
 
   const goBack = () => {
+    if (submittingRef.current) return;
     if (step > 1) {
       setStep(step - 1);
       setErrors({});
@@ -118,12 +156,44 @@ export function RequirementForm() {
   };
 
   const jumpTo = (target: number) => {
+    if (submittingRef.current) return;
     if (target >= 1 && target <= maxReached && target !== step) {
       setStep(target);
       setErrors({});
       setSubmitError(null);
       scrollToTop();
     }
+  };
+
+  /**
+   * Applies server-side field errors to the matching form fields and jumps to
+   * the first affected step. Returns false when there is nothing field-level
+   * to show (the caller then displays a general submission banner).
+   */
+  const applyServerFieldErrors = (error: ApiRequestError): boolean => {
+    const map: Record<string, string> = {};
+    let firstStep = 4;
+
+    for (const issue of error.errors) {
+      const key = formKeyForServerField(issue.field);
+      if (
+        !key ||
+        key === "body" ||
+        key === "requirements" ||
+        key === "additionalDetails"
+      ) {
+        continue;
+      }
+      if (!(key in map)) map[key] = issue.message;
+      firstStep = Math.min(firstStep, stepForField(issue.field));
+    }
+
+    if (Object.keys(map).length === 0) return false;
+    setErrors(map);
+    setStep(firstStep);
+    setMaxReached((m) => Math.max(m, firstStep));
+    scrollToTop();
+    return true;
   };
 
   const handleSubmit = async () => {
@@ -150,12 +220,24 @@ export function RequirementForm() {
       setSubmitted({ id: created.data.id, category: created.data.category });
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      setSubmitError(
+      const apiError =
         err instanceof ApiRequestError
           ? err
-          : new ApiRequestError("Something went wrong. Please try again.", 0, [], "server"),
-      );
-      window.scrollTo({ top: 0, behavior: "smooth" });
+          : new ApiRequestError(
+              "Something went wrong. Please try again.",
+              0,
+              [],
+              "server",
+            );
+
+      // The server rejected specific fields: show them next to the inputs
+      // instead of hiding a raw validation payload in a generic banner.
+      const applied =
+        apiError.kind === "validation" &&
+        applyServerFieldErrors(apiError);
+
+      setSubmitError(applied ? null : apiError);
+      if (!applied) window.scrollTo({ top: 0, behavior: "smooth" });
     } finally {
       setSubmitting(false);
       submittingRef.current = false;

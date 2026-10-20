@@ -215,7 +215,7 @@ export function Step1Basics({ form, errors, onChange }: Step1Props) {
           </p>
         ) : (
           <p className="mt-2 text-[13px] text-ink-faint">
-            You can change this later — everything you've typed is kept.
+            You can change this later — everything you&apos;ve typed is kept.
           </p>
         )}
       </fieldset>

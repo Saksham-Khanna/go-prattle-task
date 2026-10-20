@@ -218,7 +218,7 @@ export function Step4Review({
         <p className="text-sm font-medium text-white/85">{meta.description}</p>
       </div>
 
-      {submitError && submitError.kind !== "validation" && (
+      {submitError && (
         <div
           className="flex items-start gap-2.5 rounded-xl border border-danger/25 bg-danger-soft px-4 py-3.5"
           role="alert"
@@ -226,7 +226,11 @@ export function Step4Review({
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-danger" />
           <div className="text-[13px] leading-relaxed text-danger">
             <p className="font-bold">Submission failed</p>
-            <p className="mt-0.5">{submitError.message}</p>
+            <p className="mt-0.5">
+              {submitError.kind === "validation"
+                ? "The requirements API rejected this submission. Review the highlighted fields and try again."
+                : submitError.message}
+            </p>
             {submitError.kind === "network" && (
               <p className="mt-1 font-medium text-danger/80">
                 Your entries are safe — fix the connection and press Submit
@@ -285,7 +289,7 @@ export function Step4Review({
       <p className="flex items-center gap-2 text-xs text-ink-faint">
         <ClipboardCheck className="h-4 w-4 shrink-0" />
         Submitting validates the full payload and saves it to the requirements
-        database. You'll get a requirement ID on success.
+        database. You&apos;ll get a requirement ID on success.
       </p>
     </div>
   );

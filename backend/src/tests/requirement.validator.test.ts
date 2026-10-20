@@ -2,13 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   dateRangeError,
   requirementPayloadSchema,
+  toFieldErrors,
+  todayIsoDate,
 } from "../validators/requirement";
+
+function addDays(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
 
 const base = {
   eventName: "Circuitry — Annual Tech Fest 2026",
   eventType: "college-fest",
-  startDate: "2026-03-14",
-  endDate: "2026-03-15",
+  startDate: addDays(10),
+  endDate: addDays(11),
   location: "Pune",
   venue: "Central auditorium",
 };
@@ -83,11 +91,85 @@ describe("requirementPayloadSchema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts a single-day event (end = start)", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      startDate: addDays(10),
+      endDate: addDays(10),
+      category: "performer",
+      requirements: performerRequirements,
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts a valid multi-day event", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      startDate: addDays(5),
+      endDate: addDays(9),
+      category: "crew",
+      requirements: crewRequirements,
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects an event date in the past with a field-specific message", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      startDate: addDays(-1),
+      endDate: null,
+      category: "performer",
+      requirements: performerRequirements,
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const errors = toFieldErrors(res.error.issues, {
+        ...base,
+        category: "performer",
+        requirements: performerRequirements,
+        additionalDetails: emptyDetails,
+      });
+      expect(errors).toContainEqual({
+        field: "startDate",
+        message: "Event date can't be in the past",
+      });
+    }
+  });
+
+  it("rejects an end date earlier than the start date", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      startDate: addDays(10),
+      endDate: addDays(9),
+      category: "planner",
+      requirements: plannerRequirements,
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const fields = toFieldErrors(res.error.issues).map((e) => e.field);
+      expect(fields).toContain("endDate");
+    }
+  });
+
   it("rejects a planner payload carrying performer requirements", () => {
     const res = requirementPayloadSchema.safeParse({
       ...base,
       category: "planner",
       requirements: performerRequirements,
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects a performer payload carrying crew requirements", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      category: "performer",
+      requirements: crewRequirements,
       additionalDetails: emptyDetails,
     });
     expect(res.success).toBe(false);
@@ -101,6 +183,27 @@ describe("requirementPayloadSchema", () => {
       additionalDetails: emptyDetails,
     });
     expect(res.success).toBe(false);
+  });
+
+  it("rejects a planner payload with valid planner fields plus a performer field", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      category: "planner",
+      requirements: { ...plannerRequirements, performanceType: "dj" },
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const errors = toFieldErrors(res.error.issues, {
+        category: "planner",
+        requirements: { ...plannerRequirements, performanceType: "dj" },
+      });
+      expect(errors).toContainEqual({
+        field: "requirements.performanceType",
+        message:
+          "Performance type is a Performer field and isn't valid for a Planner requirement.",
+      });
+    }
   });
 
   it("rejects an unknown category", () => {
@@ -128,6 +231,27 @@ describe("requirementPayloadSchema", () => {
     }
   });
 
+  it("never exposes raw Zod messages for missing fields", () => {
+    const res = requirementPayloadSchema.safeParse({
+      category: "planner",
+      requirements: {},
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      const messages = toFieldErrors(res.error.issues).map((e) => e.message);
+      expect(messages).toContain("Event name is required.");
+      expect(messages).toContain("Expected attendee count is required.");
+      expect(messages.some((m) => m === "Required")).toBe(false);
+      expect(
+        messages.some((m) =>
+          /^Expected (string|number|array|object), received/.test(m),
+        ),
+      ).toBe(false);
+      expect(messages.some((m) => m.startsWith("Invalid input"))).toBe(false);
+    }
+  });
+
   it("reports services when a planner selects none", () => {
     const res = requirementPayloadSchema.safeParse({
       ...base,
@@ -151,6 +275,18 @@ describe("requirementPayloadSchema", () => {
     });
     expect(res.success).toBe(false);
   });
+
+  it("rejects an impossible calendar date", () => {
+    const res = requirementPayloadSchema.safeParse({
+      ...base,
+      startDate: "2027-02-31",
+      endDate: null,
+      category: "performer",
+      requirements: performerRequirements,
+      additionalDetails: emptyDetails,
+    });
+    expect(res.success).toBe(false);
+  });
 });
 
 describe("dateRangeError", () => {
@@ -164,5 +300,15 @@ describe("dateRangeError", () => {
 
   it("allows an open-ended range (no end date)", () => {
     expect(dateRangeError("2026-03-14", null)).toBeNull();
+  });
+
+  it("allows a multi-day range", () => {
+    expect(dateRangeError("2026-03-14", "2026-03-18")).toBeNull();
+  });
+});
+
+describe("todayIsoDate", () => {
+  it("returns a yyyy-mm-dd UTC date", () => {
+    expect(todayIsoDate(new Date("2026-10-20T23:30:00Z"))).toBe("2026-10-20");
   });
 });

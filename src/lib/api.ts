@@ -8,12 +8,25 @@ import type { FieldIssue } from "@/lib/validation";
 /**
  * API utility layer.
  *
- * Points at `NEXT_PUBLIC_API_URL` when provided (e.g. the standalone
- * Express + MongoDB backend: http://localhost:5000/api), otherwise falls
- * back to the embedded API shipped with this app (same contract, relative
- * path). Both backends implement identical response shapes.
+ * Always talks to the standalone Express + MongoDB backend configured with
+ * `NEXT_PUBLIC_API_URL` (e.g. http://localhost:5000/api). There is no embedded
+ * Next.js API route in this app.
  */
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "/api").replace(/\/+$/, "");
+const CONFIGURED_API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(
+  /\/+$/,
+  "",
+);
+const API_BASE = CONFIGURED_API_BASE || "/api";
+
+const REQUEST_TIMEOUT_MS = 15_000;
+const HEALTH_TIMEOUT_MS = 5_000;
+
+function timeoutSignal(ms: number): AbortSignal | undefined {
+  return typeof AbortSignal !== "undefined" &&
+    typeof AbortSignal.timeout === "function"
+    ? AbortSignal.timeout(ms)
+    : undefined;
+}
 
 export type ApiErrorKind = "validation" | "network" | "server" | "notFound";
 
@@ -37,6 +50,15 @@ interface ApiResponse {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!CONFIGURED_API_BASE) {
+    throw new ApiRequestError(
+      "The requirements API URL is not configured. Set NEXT_PUBLIC_API_URL to your Express backend (for example http://localhost:5000/api).",
+      0,
+      [],
+      "network",
+    );
+  }
+
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
@@ -45,10 +67,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),
       },
+      signal: init?.signal ?? timeoutSignal(REQUEST_TIMEOUT_MS),
     });
-  } catch {
+  } catch (err) {
+    const timedOut =
+      err instanceof Error &&
+      (err.name === "TimeoutError" || err.name === "AbortError");
     throw new ApiRequestError(
-      "Could not reach the requirements API. Please check your connection and try again.",
+      timedOut
+        ? "The requirements API took too long to respond. Please try again."
+        : "Could not reach the requirements API. Please check your connection and try again.",
       0,
       [],
       "network",
@@ -102,8 +130,12 @@ export const requirementsApi = {
 
 /** Non-throwing health probe used by the sidebar status widget. */
 export async function checkApiHealth(): Promise<boolean> {
+  if (!CONFIGURED_API_BASE) return false;
   try {
-    const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/health`, {
+      cache: "no-store",
+      signal: timeoutSignal(HEALTH_TIMEOUT_MS),
+    });
     if (!res.ok) return false;
     const body = (await res.json()) as { success?: boolean };
     return body.success !== false;
