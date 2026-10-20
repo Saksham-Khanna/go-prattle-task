@@ -41,8 +41,8 @@ git push -u origin main
 2. Connect the GitHub repo you just pushed.
 3. **Settings**:
    - **Root Directory**: `backend`
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm run build && npm start`
+   - **Build Command**: `npm install && npm run build`
+   - **Start Command**: `npm start`
 4. **Environment Variables** (add all):
    | Variable       | Value                                                      |
    | -------------- | ---------------------------------------------------------- |

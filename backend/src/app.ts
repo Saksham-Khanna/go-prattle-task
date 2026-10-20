@@ -8,17 +8,35 @@ import { apiRouter } from "./routes";
 export function createApp(): express.Express {
   const app = express();
 
-  const allowedOrigins = Array.from(
-    new Set([env.frontendUrl, "http://localhost:3000", "http://127.0.0.1:3000"]),
-  );
+  const configuredFrontend = env.frontendUrl.replace(/\/+$/, "");
+  const allowedOrigins = [
+    configuredFrontend,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+  ].filter(Boolean);
 
   app.use(
     cors({
       origin(origin, cb) {
-        // Allow same-origin / server-to-server requests (no Origin header)
-        if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+        // Allow same-origin / server-to-server / curl / Postman (no Origin header)
+        if (!origin) return cb(null, true);
+
+        const cleanOrigin = origin.replace(/\/+$/, "");
+
+        // Whitelisted domain
+        if (allowedOrigins.includes(cleanOrigin)) return cb(null, true);
+
+        // Allow any Vercel deployment (preview or production domains)
+        if (cleanOrigin.endsWith(".vercel.app")) return cb(null, true);
+
+        // Allow localhost on any port during development
+        if (/^https?:\/\/localhost(:\d+)?$/.test(cleanOrigin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(cleanOrigin)) {
+          return cb(null, true);
+        }
+
         return cb(new Error(`Origin ${origin} not allowed by CORS`));
       },
+      credentials: true,
     }),
   );
 
@@ -35,7 +53,19 @@ export function createApp(): express.Express {
     next();
   });
 
+  // Root health ping (useful for Render web service checks & browser verification)
+  app.get("/", (_req, res) => {
+    res.json({
+      success: true,
+      service: "gopratle-event-requirements-api",
+      status: "online",
+      healthCheck: "/api/health",
+    });
+  });
+
+  // Mount API router at both /api and root level for maximum compatibility
   app.use("/api", apiRouter);
+  app.use(apiRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

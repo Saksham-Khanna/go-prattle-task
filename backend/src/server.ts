@@ -3,14 +3,23 @@ import { connectDb, disconnectDb } from "./config/db";
 import { env } from "./config/env";
 
 async function main(): Promise<void> {
-  await connectDb();
-
   const app = createApp();
-  const server = app.listen(env.port, () => {
+
+  const server = app.listen(env.port, "0.0.0.0", () => {
     console.log(
-      `[server] requirements API listening on http://localhost:${env.port} (${env.nodeEnv})`,
+      `[server] requirements API listening on http://0.0.0.0:${env.port} (${env.nodeEnv})`,
     );
   });
+
+  try {
+    await connectDb();
+  } catch (err: unknown) {
+    const error = err as Error;
+    console.error("[server] MongoDB initial connection failed:", error?.message ?? error);
+    console.error(
+      "[server] Server is online (port open). Check MONGODB_URI and MongoDB Atlas Network Access (0.0.0.0/0).",
+    );
+  }
 
   const shutdown = (signal: string) => {
     console.log(`[server] ${signal} received — shutting down…`);
