@@ -29,10 +29,36 @@ export async function createRequirement(
   });
 }
 
+export function serializeRequirement(doc: RequirementDoc) {
+  const obj = doc.toObject ? doc.toObject() : doc;
+  const formatDateOnly = (d: Date | string | null) => {
+    if (!d) return null;
+    const dateObj = d instanceof Date ? d : new Date(d);
+    if (isNaN(dateObj.getTime())) return String(d);
+    return dateObj.toISOString().split("T")[0];
+  };
+
+  return {
+    id: String(obj._id ?? obj.id),
+    eventName: obj.eventName,
+    eventType: obj.eventType,
+    startDate: formatDateOnly(obj.startDate),
+    endDate: formatDateOnly(obj.endDate),
+    location: obj.location,
+    venue: obj.venue ?? null,
+    category: obj.category,
+    requirements: obj.requirements,
+    additionalDetails: obj.additionalDetails,
+    status: obj.status ?? "submitted",
+    createdAt: obj.createdAt instanceof Date ? obj.createdAt.toISOString() : new Date(obj.createdAt).toISOString(),
+    updatedAt: obj.updatedAt instanceof Date ? obj.updatedAt.toISOString() : new Date(obj.updatedAt).toISOString(),
+  };
+}
+
 /** Fetch one requirement by Mongo ObjectId, with format + existence checks. */
 export async function getRequirementById(
   id: string,
-): Promise<RequirementDoc> {
+): Promise<ReturnType<typeof serializeRequirement>> {
   if (!mongoose.isValidObjectId(id)) {
     throw new ApiError(400, "Invalid requirement ID format");
   }
@@ -40,5 +66,11 @@ export async function getRequirementById(
   if (!doc) {
     throw new ApiError(404, "Requirement not found");
   }
-  return doc;
+  return serializeRequirement(doc);
+}
+
+/** List requirements (convenience endpoint for sandbox/verification). */
+export async function listRequirements(limit = 50) {
+  const docs = await Requirement.find().sort({ createdAt: -1 }).limit(limit).exec();
+  return docs.map(serializeRequirement);
 }

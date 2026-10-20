@@ -12,15 +12,10 @@ client + server validation, and real API persistence.
 | Path        | What it is                                                                 |
 | ----------- | -------------------------------------------------------------------------- |
 | **root**    | Frontend — Next.js (App Router) + TypeScript + Tailwind CSS + Zod          |
-| **`backend/`** | Standalone Express + Mongoose (MongoDB) + Zod API — the assignment's backend  |
-| **`src/app/api/`** | Embedded API with the **identical contract**, backed by PostgreSQL via Drizzle — lets the app run end-to-end without a separate process (used by the sandbox/preview and any deployment where a single service is preferred) |
+| **`backend/`** | **Required** Express + Mongoose (MongoDB) + Zod API — the assignment's backend  |
 
 The frontend API layer (`src/lib/api.ts`) reads **`NEXT_PUBLIC_API_URL`**:
-- **unset** → talks to the embedded API (relative `/api`), or
 - **set** (e.g. `http://localhost:5000/api`) → talks to the Express + MongoDB backend.
-
-Both backends implement the same endpoints, response shapes, and
-category-discriminated validation — swap the env var, no code changes.
 
 ## Frontend (`/`)
 
@@ -31,15 +26,13 @@ npm install
 npm run dev          # http://localhost:3000
 ```
 
-The embedded API needs `DATABASE_URL` (see `.env.example`). To use the
-standalone backend instead, set `NEXT_PUBLIC_API_URL` and run `backend/`
-(see below).
+Set `NEXT_PUBLIC_API_URL` in `.env.local` to point at the Express backend (e.g. `http://localhost:5000/api`). Run `backend/` separately (see below).
 
 ### Structure
 
 ```
 src/
-  app/            pages + embedded API routes (api/health, api/requirements)
+  app/            pages (no embedded API routes)
   components/
     layout/       Header (progress), Sidebar (API status, live summary, tips)
     form/         RequirementForm — multi-step state + orchestration
@@ -48,7 +41,6 @@ src/
     SuccessScreen confirmation + live DB verification
   lib/            api.ts (client + error taxonomy) · validation.ts (Zod)
   types/          requirement.ts (shared domain types + option catalogs)
-  db/             Drizzle schema (requirements table mirroring the Mongo model)
 ```
 
 ### Multi-step state design
@@ -77,13 +69,14 @@ npm run dev            # http://localhost:5000
 npm test               # vitest — validation contract (no DB needed)
 ```
 
-### Endpoints (both backends)
+### Endpoints
 
 | Method | Path                 | Success | Errors |
 | ------ | -------------------- | ------- | ------ |
 | GET    | `/api/health`        | 200 `{success, status, database}` | 503 if DB down |
 | POST   | `/api/requirements`  | **201** `{success, message, data: {id, category, status}}` | 400 `{success:false, message:"Validation failed", errors:[{field,message}]}` |
 | GET    | `/api/requirements/:id` | 200 `{success, data: <record>}` | 400 malformed id · 404 not found |
+| GET    | `/api/requirements`  | 200 `{success, count, data: [...]}` | — |
 
 ### MongoDB schema (Mongoose, timestamps enabled)
 
@@ -95,13 +88,10 @@ discriminated union before Mongoose ever sees the data.
 
 ## Environment variables
 
-**Frontend** (`.env.example`)
-- `DATABASE_URL` — **required**; PostgreSQL for the embedded API (Neon on
-  Vercel, local Postgres in dev).
-- `NEXT_PUBLIC_API_URL` — optional; point at the Express API to bypass the
-  embedded one.
+**Frontend** (`.env.local`)
+- `NEXT_PUBLIC_API_URL` — **required**; URL of the Express API (e.g. `http://localhost:5000/api` locally, or `https://<your-render-service>.onrender.com/api` in production).
 
-**Backend** (`backend/.env.example`)
+**Backend** (`backend/.env`)
 - `PORT`, `MONGODB_URI`, `FRONTEND_URL` (CORS), `NODE_ENV`.
 - Never commit real credentials.
 
@@ -133,36 +123,51 @@ discriminated union before Mongoose ever sees the data.
 10. Double-press Submit → single request (guard + disabled state).
 11. `GET /api/requirements/<id>` → 200 with the saved record.
 12. `GET /api/requirements/not-a-valid-id` → 400; random UUID → 404.
-13. Check the record exists (embedded API: `GET /api/requirements` list, or
-    Mongo: `db.requirements.find()` in Atlas).
+13. Check the record exists (Mongo: `db.requirements.find()` in Atlas).
 14. Resize to mobile — form stacks, no horizontal scroll.
 
 ## Deployment
 
-The recommended path is **one service**: the Next.js app (with its embedded
-API) on **Vercel**, backed by **Neon Postgres**.
+The assignment requires **separate services**: the Next.js frontend on **Vercel**,
+the Express + MongoDB API on **Render**, and MongoDB on **Atlas**.
 
-**Frontend + embedded API → Vercel**
+### 1. MongoDB Atlas (database)
 
-1. Create a free Postgres at [neon.tech](https://neon.tech) and copy its
-   connection string.
-2. Create the table: `DATABASE_URL=… npm run db:push`.
-3. Import the repo into Vercel (framework preset **Next.js**) and set
-   `DATABASE_URL` for Production/Preview/Development.
-4. Deploy. Only `DATABASE_URL` is required — leave `NEXT_PUBLIC_API_URL` unset.
+1. Create a free cluster at <https://cloud.mongodb.com>.
+2. Create a database user (username + password).
+3. Network Access → Add IP Address → `0.0.0.0/0` (allow Render egress).
+4. Get the connection string: `mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/<dbname>`.
+5. This goes into `MONGODB_URI` in Render (backend). Database name can be `gopratle-events`.
 
-Full walkthrough (incl. SQL fallback and troubleshooting): [`DEPLOYMENT.md`](DEPLOYMENT.md).
+### 2. Backend → Render
 
-**Backend → Render** (optional, only if you use the Express + MongoDB API)
-Web Service, root `backend`; build `npm install`, start `npm run build && npm start`;
-env: `PORT`, `MONGODB_URI`, `FRONTEND_URL=https://<frontend>.vercel.app`,
-`NODE_ENV=production`. CORS then allows your deployed origin automatically.
-Set `NEXT_PUBLIC_API_URL=https://<backend>.onrender.com/api` on the frontend to
-switch to it.
+1. New **Web Service** → connect this GitHub repo.
+2. Root Directory: `backend`
+3. Build Command: `npm install`
+4. Start Command: `npm run build && npm start`
+5. Environment Variables:
+   - `MONGODB_URI` — your Atlas connection string
+   - `FRONTEND_URL` — your Vercel frontend URL (e.g. `https://my-app.vercel.app`)
+   - `NODE_ENV=production`
+   - `PORT` is injected by Render automatically.
+6. Deploy. Wait for `requirements API listening on …` in the logs.
+7. Test: `GET https://<your-service>.onrender.com/api/health` → `{ "success": true, "database": "connected", … }`.
 
-**MongoDB → Atlas**: create a free cluster, a database user, allow your IP
-(or `0.0.0.0/0` for Render egress), copy the connection string into
-`MONGODB_URI`.
+### 3. Frontend → Vercel
+
+1. Import the same GitHub repo into Vercel.
+2. Framework Preset: **Next.js** (auto-detected).
+3. Root Directory: (repo root).
+4. Environment Variables:
+   - `NEXT_PUBLIC_API_URL=https://<your-render-service>.onrender.com/api`
+5. Deploy.
+
+### 4. Verify end-to-end
+
+- Open the Vercel URL → submit a requirement → success screen with ID.
+- Verify the record exists in Atlas (`db.requirements.find()`).
+
+---
 
 ## Architecture walkthrough (5–7 min script)
 
@@ -193,6 +198,5 @@ switch to it.
   the Zod contract**, but not against a live Atlas instance in this
   sandbox — run the `backend` manual checklist once you have a
   `MONGODB_URI`.
-- The embedded API uses PostgreSQL/UUIDs (so its IDs are UUIDs, Mongo IDs
-  are ObjectIds); the UI treats IDs as opaque strings.
+- MongoDB IDs are ObjectIds; the UI treats IDs as opaque strings.
 - No authentication or vendor-side tooling (out of scope by design).

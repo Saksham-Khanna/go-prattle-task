@@ -1,80 +1,30 @@
-# Deployment Guide — Vercel + Neon Postgres
+# Deployment Guide — Vercel + Render + MongoDB Atlas
 
-This app ships with an **embedded API** (`src/app/api/*`) backed by PostgreSQL
-via Drizzle, so the whole product deploys as **one service**. No separate
-backend process is required.
+This app uses a **separate Express + MongoDB backend** (`backend/`) as required
+by the assignment. The frontend (Next.js) talks to the backend via
+`NEXT_PUBLIC_API_URL`.
 
 ```
-GitHub repo ──▶ Vercel (Next.js app + embedded API) ──▶ Neon Postgres
+GitHub repo ──▶ Vercel (Next.js frontend) ──▶ Render (Express API) ──▶ MongoDB Atlas
 ```
-
-The optional `backend/` (Express + MongoDB) is **not** needed for this path.
 
 ---
 
-## 1. Create the database (Neon, free)
+## 1. MongoDB Atlas (Database)
 
-1. Sign up at <https://neon.tech> and create a project.
-2. Copy the **connection string** — it looks like:
-
+1. Create a free cluster at <https://cloud.mongodb.com>.
+2. **Database Access** → Add New Database User → Username + Password (save these).
+3. **Network Access** → Add IP Address → `0.0.0.0/0` (allows Render egress).
+4. **Clusters** → Connect → Drivers → Copy connection string:
    ```
-   postgresql://<user>:<password>@ep-xxxxx.<region>.aws.neon.tech/<db>?sslmode=require
+   mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
    ```
+5. Append your database name: `.../gopratle-events?retryWrites=true&w=majority`.
+   This full string is your **`MONGODB_URI`** for Render.
 
-   Keep `?sslmode=require` on the end. This is your `DATABASE_URL`.
+---
 
-> Any PostgreSQL works (Supabase, Railway, Render Postgres). Neon is just the
-> recommended free option.
-
-## 2. Create the `requirements` table
-
-A migration is already committed under `drizzle/`. From the repo root, with
-your `DATABASE_URL` in the shell:
-
-```powershell
-# PowerShell (Windows)
-$env:DATABASE_URL = "postgresql://…neon.tech/db?sslmode=require"
-npm install
-npm run db:migrate     # applies drizzle/*.sql
-
-# Bash / macOS / Linux
-export DATABASE_URL="postgresql://…neon.tech/db?sslmode=require"
-npm install
-npm run db:migrate
-```
-
-`npm run db:push` also works (diffs `src/db/schema.ts` straight to the DB)
-if you prefer not to track migrations. `npm run db:generate` creates a new
-migration after schema changes. This only needs to be done once per database.
-
-<details>
-<summary>Alternative: run this SQL directly in the Neon SQL editor</summary>
-
-```sql
-create extension if not exists "pgcrypto";
-
-create table if not exists "requirements" (
-  "id" uuid primary key default gen_random_uuid() not null,
-  "event_name" text not null,
-  "event_type" text not null,
-  "start_date" date not null,
-  "end_date" date,
-  "location" text not null,
-  "venue" text,
-  "category" text not null,
-  "requirements" jsonb not null,
-  "additional_details" jsonb not null,
-  "status" text default 'submitted' not null,
-  "created_at" timestamp with time zone default now() not null,
-  "updated_at" timestamp with time zone default now() not null
-);
-```
-
-</details>
-
-## 3. Push the code to GitHub
-
-A git repository is already initialised with an initial commit.
+## 2. Push the code to GitHub
 
 ```bash
 # on github.com: create an empty repo (no README), then:
@@ -83,62 +33,100 @@ git branch -M main
 git push -u origin main
 ```
 
-## 4. Deploy on Vercel
+---
 
-1. Go to <https://vercel.com/new> and **import** the GitHub repo.
-2. Framework preset: **Next.js** (auto-detected). Leave build settings default.
-3. Open **Environment Variables** and add:
+## 3. Backend → Render
 
-   | Name           | Value                        | Environments                     |
-   | -------------- | ---------------------------- | -------------------------------- |
-   | `DATABASE_URL` | your Neon connection string  | Production, Preview, Development |
-
-   > Optional: `NEXT_PUBLIC_API_URL` only if you deploy `backend/` separately.
-   > Leave it **unset** to use the embedded API.
-
-4. Click **Deploy**. Vercel runs `npm install` + `next build`.
-
-## 5. Verify
-
-- `https://<your-app>.vercel.app/api/health` → `{ "success": true, "database": "connected" }`
-- Open the app, submit a requirement → success screen with an ID.
-- `https://<your-app>.vercel.app/api/requirements` lists saved records.
+1. Go to <https://dashboard.render.com> → **New** → **Web Service**.
+2. Connect the GitHub repo you just pushed.
+3. **Settings**:
+   - **Root Directory**: `backend`
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm run build && npm start`
+4. **Environment Variables** (add all):
+   | Variable       | Value                                                      |
+   | -------------- | ---------------------------------------------------------- |
+   | `MONGODB_URI`  | Your Atlas connection string from step 1                   |
+   | `FRONTEND_URL` | Your Vercel URL (e.g. `https://my-app.vercel.app`)         |
+   | `NODE_ENV`     | `production`                                               |
+   | `PORT`         | (leave empty — Render injects it automatically)            |
+5. Click **Create Web Service**.
+6. Wait for the deploy to finish. In the logs you should see:
+   ```
+   [db] connected to MongoDB at <host>/gopratle-events
+   [server] requirements API listening on http://0.0.0.0:<PORT> (production)
+   ```
+7. Test the health endpoint:
+   `GET https://<your-service>.onrender.com/api/health`
+   → `{ "success": true, "database": "connected", "status": "ok", ... }`
 
 ---
 
-## Environment variables
+## 4. Frontend → Vercel
 
-### Frontend / embedded API (Vercel)
+1. Go to <https://vercel.com/new> → **Import** the same GitHub repo.
+2. **Framework Preset**: **Next.js** (auto-detected).
+3. **Root Directory**: (repo root — leave default).
+4. **Environment Variables**:
+   | Variable              | Value                                             |
+   | --------------------- | ------------------------------------------------- |
+   | `NEXT_PUBLIC_API_URL` | `https://<your-render-service>.onrender.com/api`  |
+5. Click **Deploy**.
+6. Vercel runs `npm install` → `next build`. No `DATABASE_URL` needed.
 
-| Variable               | Required | Purpose                                                                 |
-| ---------------------- | -------- | ----------------------------------------------------------------------- |
-| `DATABASE_URL`         | **Yes**  | PostgreSQL for the embedded API. Required at **build** and runtime.     |
-| `NEXT_PUBLIC_API_URL`  | No       | Point the frontend at the standalone `backend/` instead of embedded API. |
+---
 
-### Standalone backend (`backend/`, optional)
+## 5. Verify end-to-end
 
-Only needed if you deploy the Express + MongoDB service separately.
+- Open your Vercel URL.
+- Submit a requirement → success screen with an ID.
+- In Atlas: **Browse Collections** → `gopratle-events` → `requirements` → you should see the document.
 
-| Variable       | Required | Purpose                                    |
-| -------------- | -------- | ------------------------------------------ |
-| `PORT`         | No       | API port (Render injects it).              |
-| `MONGODB_URI`  | **Yes**  | MongoDB / Atlas connection string.         |
-| `FRONTEND_URL` | No       | Allowed CORS origin (your Vercel domain).  |
-| `NODE_ENV`     | No       | `production` on the server.                |
+---
 
-See [`backend/README.md`](backend/README.md) for the Render path.
+## Environment Variables Summary
+
+### Frontend (Vercel)
+
+| Variable              | Required | Purpose                                                    |
+| --------------------- | -------- | ---------------------------------------------------------- |
+| `NEXT_PUBLIC_API_URL` | **Yes**  | Full URL of the Express API (Render service) + `/api` path |
+
+### Backend (Render)
+
+| Variable       | Required | Purpose                                                       |
+| -------------- | -------- | ------------------------------------------------------------- |
+| `MONGODB_URI`  | **Yes**  | MongoDB Atlas connection string (with DB name appended).      |
+| `FRONTEND_URL` | **Yes**  | CORS allow-list origin (your Vercel URL).                     |
+| `NODE_ENV`     | **Yes**  | `production`                                                  |
+| `PORT`         | No       | Injected by Render; do not set manually.                      |
 
 ---
 
 ## Troubleshooting
 
-- **Build fails / "DATABASE_URL is required"** — the variable is read when the
-  API route loads. Add `DATABASE_URL` in Vercel **before** deploying, then
-  redeploy.
-- **`/api/health` returns 503** — the DB is unreachable. Check the connection
-  string (password, `sslmode=require`, no surrounding quotes).
-- **`relation "requirements" does not exist`** — you skipped step 2. Run
-  `npm run db:push`.
-- **Submissions fail only on the deployed site** — the frontend and DB may be
-  using different projects. Confirm `DATABASE_URL` is set for the Production
-  environment in Vercel.
+- **Backend health returns 503 / "database: disconnected"** → `MONGODB_URI` is wrong, or Atlas Network Access doesn't allow `0.0.0.0/0`. Check Render logs.
+- **Frontend shows "Could not reach the requirements API"** → `NEXT_PUBLIC_API_URL` is wrong or missing trailing `/api`. Check Vercel env vars and redeploy.
+- **CORS error in browser console** → `FRONTEND_URL` in Render does not match your Vercel origin exactly (protocol + host, no trailing slash).
+- **Build fails on Vercel** → Run `npm run build` locally first; check for TypeScript errors.
+- **`npm run dev` fails locally (frontend)** → Ensure `backend` is running on `localhost:5000` and `.env.local` has `NEXT_PUBLIC_API_URL=http://localhost:5000/api`.
+
+---
+
+## Local Development
+
+```bash
+# Terminal 1: Backend
+cd backend
+cp .env.example .env
+# Edit .env → set MONGODB_URI (local Mongo or Atlas), FRONTEND_URL=http://localhost:3000
+npm install
+npm run dev         # http://localhost:5000
+
+# Terminal 2: Frontend
+cd ..               # repo root
+cp .env.example .env.local   # or create manually
+# Edit .env.local → NEXT_PUBLIC_API_URL=http://localhost:5000/api
+npm install
+npm run dev         # http://localhost:3000
+```
